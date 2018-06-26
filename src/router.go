@@ -22,7 +22,7 @@ func (ps Params) ByName(name string) string {
 	return ""
 }
 
-// 在http.HandlerFunc的基础上新增了一个参数，用以处理http请求
+// Handle 在http.HandlerFunc的基础上新增了一个参数，用以处理http请求
 type Handle func(http.ResponseWriter, *http.Request, Params)
 
 // Router 类http.Handler结构体，把不同请求转接到配置好了相应代理的方法上去
@@ -46,6 +46,3 @@ type Router struct {
 // Lookup方法用以检索指定方法制定路径下的路由代理，发现了就返回，否则返回false
 // allowed方法
 // ServeHTTP方法，使Router实现http.Handle接口
-
-// New() 返回一个*Router
-// 一个空标识符变量调用New（）
