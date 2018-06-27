@@ -6,6 +6,7 @@ import "strings"
 type nodeType uint8
 
 // node类型
+// 解惑???????????????
 type node struct {
 	path      string //该节点所在路径字符串
 	wildChild bool   //代表什么？
@@ -63,7 +64,8 @@ func (n *node) addRoute(path string, handle Handle) {
 			}
 			//分割
 			if i < len(n.path) {
-				childNode := node{
+				// 解惑??????????????
+				child := node{
 					path:      n.path[i:],
 					wildChild: n.wildChild, //?
 					nType:     static,
@@ -72,13 +74,14 @@ func (n *node) addRoute(path string, handle Handle) {
 					handle:    n.handle,   //?
 					priority:  n.priority - 1,
 				}
-				// 给childNode的maxParams属性赋值
-				for i := range childNode.children {
-					if childNode.children[i].maxParams > childNode.maxParams {
-						childNode.maxParams = childNode.children[i].maxParams
+				// 给child的maxParams属性赋值
+				for i := range child.children {
+					if child.children[i].maxParams > child.maxParams {
+						child.maxParams = child.children[i].maxParams
 					}
 				}
-				n.children = []*node{&childNode}      //其他节点呢？直接丢弃吗？
+				// 解惑??????????
+				n.children = []*node{&child}          //其他节点呢？直接丢弃吗？
 				n.indices = string([]byte{n.path[i]}) //字符索引为单个字母
 				n.path = path[:i]                     //那之前部分的从此节点往下的词典树呢？
 				n.handle = nil                        //节点处不需设置handle
@@ -137,12 +140,12 @@ func (n *node) addRoute(path string, handle Handle) {
 				// 否则插入节点
 				if c != ':' && c != '*' {
 					n.indices += string([]byte{c})
-					childNode := &node{
+					child := &node{
 						maxParams: numParams,
 					}
-					n.children = append(n.children, childNode)
+					n.children = append(n.children, child)
 					n.incrementChildPrio(len(n.children) - 1) //?
-					n = childNode
+					n = child
 				}
 
 				n.insertChild(numParams, path, fullPath, handle)
@@ -166,9 +169,112 @@ func (n *node) addRoute(path string, handle Handle) {
 
 // insertChild方法，插入子节点
 func (n *node) insertChild(numParams uint8, path, fullPath string, handle Handle) {
+	var offset int //路径中已经处理的字节数
+	// 发现第一个通配符前面的前缀
+	for i, max := 0, len(path); numParams > 0; i++ {
+		// 首先判断是不是通配符
+		c := path[i]
+		if c != ':' && c != '*' {
+			continue
+		}
+		// 找到结束时的通配符（path结束或者/）
+		end := i + 1
+		for end < max && path[end] != '/' {
+			switch path[end] {
+			// 通配符名字必须不包含':' 与 '*'
+			case ':', '*':
+				panic("only one wildcard per path segment is allowed, has: '" +
+					path[i:] + "' in path '" + fullPath + "'")
+			default:
+				end++
+			}
+		}
+		// 检查当我们在此处插入这个通配符时这个node是否会产生无法到达的子节点
+		if len(n.children) > 0 {
+			panic("wildcard route '" + path[i:end] +
+				"' conflicts with existing children in path '" + fullPath + "'")
+		}
+		// 检查通配符是否有一个名字,而不仅仅是':' 与 '*'两个单独的字符
+		if end-i < 2 {
+			panic("wildcards must be named with a non-empty name in path '" + fullPath + "'")
+		}
+		if c == ':' {
+			// param 匹配
+			// 在通配符刚开始的时候分割路径
+			if i > 0 {
+				n.path = path[offset:i]
+				offset = i
+			}
+			child := &node{
+				nType:     param,
+				maxParams: numParams,
+			}
+			// 解惑？？？？？？？？？
+			n.children = []*node{child}
+			n.wildChild = true
+			n = child
+			n.priority++
+			numParams--
+			// 如果路径不以通配符结尾,那么此处将会存在一个以'/'开头的非通配符的子路径
+			if end < max {
+				n.path = path[offset:end]
+				offset = end
+				child := &node{
+					maxParams: numParams,
+					priority:  1,
+				}
+				n.children = []*node{child}
+				n = child
+			}
+		} else { //全匹配
+			// 不是在路径结束的位置
+			if end != max || numParams > 1 {
+				panic("catch-all routes are only allowed at the end of the path in path '" + fullPath + "'")
+			}
+			// 根路径
+			if len(n.path) > 0 && n.path[len(n.path)-1] == '/' {
+				panic("catch-all conflicts with existing handle for the path segment root in path '" + fullPath + "'")
+			}
+			//目前为'/'修正宽度为1
+			i--
+			if path[i] != '/' {
+				panic("no / before catch-all in path '" + fullPath + "'")
+			}
+			n.path = path[offset:i]
+			//第一个节点:空路径全匹配
+			child := &node{
+				wildChild: true,
+				nType:     catchAll,
+				maxParams: 1,
+			}
+			n.children = []*node{child}
+			n.indices = string(path[i])
+			n = child
+			n.priority++
+			// 第二个节点:节点存储变量
+			child = &node{
+				path:      path[i:],
+				nType:     catchAll,
+				maxParams: 1,
+				handle:    handle,
+				priority:  1,
+			}
+			n.children = []*node{child}
+			return
+		}
+	}
+	//将剩余路径部分和句柄handle插入到链条中
+	n.path = path[offset:]
+	n.handle = handle
+}
+
+// getValue方法
+// 返回注册了指定路径的handle
+// 通配符的值被存储到了一个map中
+// 如果该路径没有对应的handle,但却有一个在其基础上尾部含有'/'的路径,建议重定向
+func (n *node) getValue(path string) (handle Handle, p Params, tsr bool) {
 
 }
 
-// getValue方法，返回给定path对应的handle
 // findCaseInsensitivePath方法，对大小写不敏感的path区分对待
 // findCaseInsensitivePathRec递归

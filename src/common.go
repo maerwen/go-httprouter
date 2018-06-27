@@ -3,10 +3,10 @@ package httprouter
 // 常量，变量，函数
 // 常量
 const (
-	static nodeType = iota //default
-	root
-	param
-	catchAll
+	static   nodeType = iota //default
+	root                     //根节点
+	param                    //参数匹配
+	catchAll                 //全匹配
 )
 
 // 一个空标识符变量调用New（）
