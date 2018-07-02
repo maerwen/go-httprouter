@@ -4,6 +4,8 @@ import "net/http"
 
 // 变量定义
 // 空标识符调用new方法
+// 确认Router调用了http.Handler接口
+var _ = New()
 
 // 结构体定义
 // Param
@@ -14,7 +16,7 @@ type Param struct {
 }
 
 // Params
-// 一个Params的slice，其内部有序，所可以用索引来取出元素
+// 一个Param的slice，其内部有序，所可以用索引来取出元素
 type Params []Param
 
 // ByName（）
@@ -74,25 +76,240 @@ type Router struct {
 	// 如果未设置,那么将会调用http.NotFound.
 	NotFound http.Handler
 
-	//
+	// 当一个请求不能被按照路径处理并且HandleMethodNotAllowed设置为true,
+	// 那么配置好的http.Handler将会被调用.
+	// 如果这个属性没有设置,一个包含了http.StatusMethodNotAllowed信息的http.Error将会被调用.
+	// 在处理器被调用之前,先会设置一个附带允许的请求方法的"Allow"的请求头
+	MethodNotAllowed http.Handler
+
+	// 处理宕机并且从http handler恢复数据的功能
+	// 它被用来生成一个错误反馈页面并且返回一个为500的http error(Internal Server Error).
+	// 这个处理器可以避免你的服务器因为不能恢复的宕机而崩溃
+	PanicHandler func(http.ResponseWriter, *http.Request, interface{})
 }
 
-// Handle方法，处理不同类型请求
-// HandlerFunc方法，一个允许Router调用http.HandleFunc的适配器
-// ServeFiles方法，从给定的文件系统中读取文件
+// Handle
+// Handle为给定的路径和方法注册了一个新的请求处理器
+// 对于GET,POST,PUT,PATCH以及DELETE的请求,都有各自的快捷方法可供调用
+// 这个方法可以在高负荷下正常使用,并且允许不频繁地,非标准化的私有的方法调用(例如在代理下的内部通信)
+func (r *Router) Handle(method, path string, handle Handle) {
+	if path[0] != '/' {
+		panic("path must begin with '/' in path '" + path + "'")
+	}
+	if r.trees == nil {
+		r.trees = make(map[string]*node)
+	}
+	root := r.trees[method]
+	if root == nil {
+		root = new(node)
+		r.trees[method] = root
+	}
+	root.addRoute(path, handle)
+}
 
-//Get方法 相应路径的Get类型请求处理
-//HEAD方法 相应路径的HEAD类型请求处理
-//OPTIONS方法 相应路径的OPTIONS类型请求处理
-//POST方法 相应路径的POST类型请求处理
-//PUT方法 相应路径的PUT类型请求处理
-//PATCH方法 相应路径的PATCH类型请求处理
-//DELETE方法 相应路径的DELETE类型请求处理
+//GET
+//快捷调用router.Handle("GET", path, handle)
+func (r *Router) GET(path string, handle Handle) {
+	r.Handle("GET", path, handle)
+}
 
-// recv方法，遇到宕机时进行恢复
+//HEAD
+//快捷调用router.Handle("HEAD", path, handle)
+func (r *Router) HEAD(path string, handle Handle) {
+	r.Handle("HEAD", path, handle)
+}
 
-// Lookup方法用以检索指定方法制定路径下的路由代理，发现了就返回，否则返回false
-// allowed方法
-// ServeHTTP方法，使Router实现http.Handle接口
+//OPTIONS
+//快捷调用router.Handle("OPTIONS", path, handle)
+func (r *Router) OPTIONS(path string, handle Handle) {
+	r.Handle("OPTIONS", path, handle)
+}
+
+//POST
+//快捷调用router.Handle("POST", path, handle)
+func (r *Router) POST(path string, handle Handle) {
+	r.Handle("POST", path, handle)
+}
+
+//PUT
+//快捷调用router.Handle("PUT", path, handle)
+func (r *Router) PUT(path string, handle Handle) {
+	r.Handle("PUT", path, handle)
+}
+
+//PATCH
+//快捷调用router.Handle("PATCH", path, handle)
+func (r *Router) PATCH(path string, handle Handle) {
+	r.Handle("PATCH", path, handle)
+}
+
+//DELETE
+//快捷调用router.Handle("DELETE", path, handle)
+func (r *Router) DELETE(path string, handle Handle) {
+	r.Handle("DELETE", path, handle)
+}
+
+// HandlerFunc
+// 一个允许把http.HandleFunc当做request handle来调用的适配器
+func (r *Router) HandlerFunc(method, path string, handler http.HandlerFunc) {
+	// r.Handler(method, path, handler) //r.Handler?
+}
+
+// ServeFiles
+// 从给定的文件系统根目录中读取文件
+// 路径必须以"/*filepath"结尾,文件都从本地路径/defined/root/dir/*filepath处获取
+// 例如:
+// 		如果根路径是"/etc"并且*filepath是"passwd",将会找到本地文件"/etc/passwd".
+// 本质上调用了一个http.FileServer,因此调用了http.NotFound而不是Router的NotFound处理器.
+// 为了使用操作系统的文件系统实现,使用http.Dir:
+// 		router.ServeFiles("/src/*filepath", http.Dir("/var/www"))
+func (r *Router) ServeFiles(path string, root http.FileSystem) {
+	if len(path) < 10 || path[len(path)-10:] != "/*filepath" {
+		panic("path must end with /*filepath in path '" + path + "'")
+	}
+	fileServer := http.FileServer(root)
+	r.GET(path, func(w http.ResponseWriter, req *http.Request, ps Params) {
+		req.URL.Path = ps.ByName("filepath")
+		fileServer.ServeHTTP(w, req)
+	})
+}
+
+// recv
+// 遇到宕机时进行恢复
+func (r *Router) recv(w http.ResponseWriter, req *http.Request) {
+	if rcv := recover(); rcv != nil {
+		r.PanicHandler(w, req, rcv)
+	}
+}
+
+// Lookup
+// 允许手动检索一个方法和路径的结合体
+// 这是一个围绕路由去建立框架的有用案例.
+// 如果该路径被找到了,返回这个处理器函数和路径的参数值.
+// 否则第三个返回值表明是否重定向到相同的头部包含'/'的路径
+func (r *Router) Lookup(method, path string) (Handle, Params, bool) {
+	if root := r.trees[method]; root != nil {
+		return root.getValue(path)
+	}
+	return nil, nil, false
+}
+
+// allowed
+func (r *Router) allowed(path, reqMethod string) (allow string) {
+	if path == "*" { //服务器范围
+		for method := range r.trees {
+			if method == "OPTIONS" {
+				continue
+			}
+			//把请求的方法添加到允许的方法列表中去
+			if len(allow) == 0 {
+				allow = method
+			} else {
+				allow += "," + method
+			}
+		}
+	} else { //特别的路径
+		for method := range r.trees {
+			// 跳过请求的方法,我们已经尝试过这一个了
+			if method == reqMethod || method == "OPTIONS" {
+				continue
+			}
+			handle, _, _ := r.trees[method].getValue(path)
+			if handle != nil {
+				//把请求的方法添加到允许的方法列表中去
+				if len(allow) == 0 {
+					allow = method
+				} else {
+					allow += "," + method
+				}
+			}
+		}
+	}
+	if len(allow) > 0 {
+		allow += ",OPTIONS"
+	}
+	return
+}
+
+// ServeHTTP
+// 使Router实现http.Handle接口
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if r.PanicHandler != nil {
+		defer r.recv(w, req)
+	}
+	path := req.URL.Path
+	if root := r.trees[req.Method]; root != nil {
+		if handle, ps, tsr := root.getValue(path); handle != nil {
+			handle(w, req, ps)
+			return
+		} else if req.Method != "CONNECT" && path != "/" {
+			code := 301 //GET请求,永久重定向
+			if req.Method != "GET" {
+				//相同方法,临时重定向
+				//在Go1.3版本,不支持308状态码
+				code = 307
+			}
+			if tsr && r.RedirectTrailingSlash {
+				if len(path) > 1 && path[len(path)-1] == '/' {
+					req.URL.Path = path[:len(path)-1]
+				} else {
+					req.URL.Path = path + "/"
+				}
+				http.Redirect(w, req, req.URL.String(), code)
+				return
+			}
+			// 尝试去修正请求路径
+			if r.RedirectFixedPath {
+				fixedPath, found := root.findCaseInsensitivePath(
+					CleanPath(path), r.RedirectTrailingSlash,
+				)
+				if found {
+					req.URL.Path = string(fixedPath)
+					http.Redirect(w, req, req.URL.String(), code)
+					return
+				}
+			}
+		}
+	}
+	if req.Method == "OPTIONS" && r.HandleOPTIONS {
+		// 处理OPTIONS请求
+		if allow := r.allowed(path, req.Method); len(allow) > 0 {
+			w.Header().Set("Allow", allow)
+			return
+		}
+	} else {
+		// 处理405响应状态码
+		if r.HandleMethodNotAllowed {
+			if allow := r.allowed(path, req.Method); len(allow) > 0 {
+				w.Header().Set("Allow", allow)
+				if r.MethodNotAllowed != nil {
+					r.MethodNotAllowed.ServeHTTP(w, req)
+				} else {
+					http.Error(w,
+						http.StatusText(http.StatusMethodNotAllowed),
+						http.StatusMethodNotAllowed,
+					)
+				}
+				return
+			}
+		}
+	}
+	// 处理404响应状态码
+	if r.NotFound != nil {
+		r.NotFound.ServeHTTP(w, req)
+	} else {
+		http.NotFound(w, req)
+	}
+}
 
 // New
+// 返回一个全新的已经初始化的Router
+// 路径自动校正(包含'/'处理)默认调用.
+func New() *Router {
+	return &Router{
+		RedirectTrailingSlash:  true,
+		RedirectFixedPath:      true,
+		HandleMethodNotAllowed: true,
+		HandleOPTIONS:          true,
+	}
+}
