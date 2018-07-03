@@ -1,13 +1,23 @@
 package httprouter
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
 // 变量定义
 // 空标识符调用new方法
 // 确认Router调用了http.Handler接口
 var _ = New()
 
+// 仅Go1.7以上版本支持
+var ParamsKey = paramsKey{}
+
 // 结构体定义
+// paramsKey
+// 在URL的参数被存储时,以paramsKey作为键
+type paramsKey struct{}
+
 // Param
 // 是一个独立的URL参数,由一个key和一个value组成
 type Param struct {
@@ -149,10 +159,23 @@ func (r *Router) DELETE(path string, handle Handle) {
 	r.Handle("DELETE", path, handle)
 }
 
+// Handler
+// 一个允许把http.Handler当做request handle来调用的适配器
+// 在Go1.7之后版本,ParamsKey下的Params在请求的context也是可用的
+func (r *Router) Handler(method, path string, handler http.Handler) {
+	r.Handle(method, path,
+		func(w http.ResponseWriter, req *http.Request, p Params) {
+			ctx := req.Context()
+			ctx = context.WithValue(ctx, ParamsKey, p)
+			req = req.WithContext(ctx)
+			handler.ServeHTTP(w, req)
+		})
+}
+
 // HandlerFunc
 // 一个允许把http.HandleFunc当做request handle来调用的适配器
 func (r *Router) HandlerFunc(method, path string, handler http.HandlerFunc) {
-	// r.Handler(method, path, handler) //r.Handler?
+	r.Handler(method, path, handler)
 }
 
 // ServeFiles
@@ -312,4 +335,12 @@ func New() *Router {
 		HandleMethodNotAllowed: true,
 		HandleOPTIONS:          true,
 	}
+}
+
+// ParamsFromContext
+//从请求的context中提取URL参数,如果当前没有则返回nil.
+// 仅支持Go1.7及以上版本
+func ParamsFromContext(ctx context.Context) Params {
+	p, _ := ctx.Value(ParamsKey).(Params)
+	return p
 }
