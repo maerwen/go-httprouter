@@ -1,5 +1,9 @@
 package httprouter
 
+/*
+	CleanPath
+		bufApp
+*/
 // bufApp
 // 如果需要的话,在内部帮你延迟创建一个缓冲区
 func bufApp(buf *[]byte, s string, w int, c byte) {

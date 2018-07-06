@@ -1,5 +1,20 @@
 package httprouter
 
+/*
+	nodeType
+	node
+
+	incrementChildPrio
+	addRoute
+		min
+		countParams
+	insertChild
+	getValue
+	findCaseInsensitivePath
+	findCaseInsensitivePathRec
+		min
+		shiftNRuneBytes
+*/
 import (
 	"strings"
 	"unicode"

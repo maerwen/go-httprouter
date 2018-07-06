@@ -1,5 +1,31 @@
 package httprouter
 
+/*
+	paramsKey
+	Param
+	Params
+		ByName
+	Handle
+	Router
+		Handle
+		GET
+		HEAD
+		OPTIONS
+		POST
+		PUT
+		PATCH
+		DELETE
+		Handler
+		HandlerFunc
+		ServeFiles
+		recv
+		Lookup
+		allowed
+		ServeHTTP
+
+	New
+	ParamsFromContext
+*/
 import (
 	"context"
 	"net/http"
